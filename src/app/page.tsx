@@ -155,6 +155,34 @@ export default function DashboardPage() {
     setEditTarget({ type, existingCheckIn, defaultDate: dayKey });
   }
 
+  /**
+   * Calcule l'heure de départ théorique pour faire 7h dans la journée.
+   * Retourne une string "HH:mm" ou null si pas assez de données.
+   */
+  function estimateDeparture(dayCheckIns: CheckIn[]): string | null {
+    const byType = Object.fromEntries(dayCheckIns.map((c) => [c.type, c.timestamp]));
+    if (!byType.morning_in) return null;
+
+    const morningIn = parseISO(byType.morning_in).getTime();
+
+    if (byType.lunch_out && byType.lunch_in) {
+      // Calcul exact : remaining = 7h - (lunch_out - morning_in)
+      const morningWorked = (parseISO(byType.lunch_out).getTime() - morningIn) / 60000;
+      const remaining = 7 * 60 - morningWorked;
+      const dep = new Date(parseISO(byType.lunch_in).getTime() + remaining * 60000);
+      return format(toZonedTime(dep, TZ), "HH:mm");
+    }
+
+    if (byType.lunch_out && !byType.lunch_in) {
+      // On sait la matinée mais pas la reprise → on ne peut pas estimer
+      return null;
+    }
+
+    // Seulement morning_in → estimation brute : arrivée + 8h30 (7h travail + ~1h30 pause)
+    const dep = new Date(morningIn + (7 * 60 + 90) * 60000);
+    return format(toZonedTime(dep, TZ), "HH:mm") + " ≈";
+  }
+
   // Labels navigation
   const weekStart = startOfWeek(weekRef, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(weekRef, { weekStartsOn: 1 });
@@ -273,19 +301,19 @@ export default function DashboardPage() {
                   <button
                     onClick={() => setOpenDay(isOpen ? null : day)}
                     className={`w-full flex items-center justify-between px-4 py-3 transition-all text-left ${isToday
-                        ? "bg-violet-950/50 border border-violet-700/40"
-                        : isComplete
-                          ? "bg-slate-800/60"
-                          : isFuture
-                            ? "bg-slate-900/40 opacity-60"
-                            : "bg-slate-800/30"
+                      ? "bg-violet-950/50 border border-violet-700/40"
+                      : isComplete
+                        ? "bg-slate-800/60"
+                        : isFuture
+                          ? "bg-slate-900/40 opacity-60"
+                          : "bg-slate-800/30"
                       } ${isOpen ? "rounded-t-2xl" : "rounded-2xl"} hover:brightness-110 active:scale-98`}
                   >
                     <div className="flex items-center gap-3">
                       <div className={`w-2 h-2 rounded-full ${isComplete ? "bg-emerald-500" :
-                          isToday ? "bg-violet-500 animate-pulse" :
-                            isFuture ? "bg-slate-700" :
-                              workedMin > 0 ? "bg-amber-500" : "bg-red-900"
+                        isToday ? "bg-violet-500 animate-pulse" :
+                          isFuture ? "bg-slate-700" :
+                            workedMin > 0 ? "bg-amber-500" : "bg-red-900"
                         }`} />
                       <div>
                         <p className={`text-sm font-semibold capitalize ${isToday ? "text-violet-300" : isFuture ? "text-slate-500" : "text-white"}`}>
@@ -321,32 +349,39 @@ export default function DashboardPage() {
                   {isOpen && (
                     <div className="border-t border-slate-800/50 bg-slate-950/50 rounded-b-2xl px-2 py-2 space-y-1">
                       {(["morning_in", "lunch_out", "lunch_in", "evening_out"] as CheckInType[]).map((type) => {
-                        const ci = (isToday ? todayCheckIns : weekCheckIns).find(
-                          (c) =>
-                            c.type === type &&
-                            format(toZonedTime(parseISO(c.timestamp), TZ), "yyyy-MM-dd") === day
+                        const dayCheckIns = (isToday ? todayCheckIns : weekCheckIns).filter(
+                          (c) => format(toZonedTime(parseISO(c.timestamp), TZ), "yyyy-MM-dd") === day
                         );
+                        const ci = dayCheckIns.find((c) => c.type === type);
                         const isNextForToday = isToday && nextCheckIn === type;
+                        const depEstimate = type === "evening_out" && !ci ? estimateDeparture(dayCheckIns) : null;
 
                         return (
                           <button
                             key={type}
                             onClick={() => openEdit(type, ci ?? null, day)}
                             className={`w-full flex items-center justify-between rounded-xl px-4 py-2.5 transition-all text-left active:scale-98 ${ci
-                                ? "bg-slate-800/50 hover:bg-slate-700/60"
-                                : isNextForToday
-                                  ? "bg-violet-950/40 border border-violet-800/40 hover:bg-violet-900/40"
-                                  : "bg-slate-900/50 hover:bg-slate-800/40"
+                              ? "bg-slate-800/50 hover:bg-slate-700/60"
+                              : isNextForToday
+                                ? "bg-violet-950/40 border border-violet-800/40 hover:bg-violet-900/40"
+                                : "bg-slate-900/50 hover:bg-slate-800/40"
                               }`}
                           >
                             <div className="flex items-center gap-2.5">
                               <span className="text-base">{CHECK_IN_ICONS[type]}</span>
-                              <span className={`text-sm font-medium ${ci ? "text-white" :
-                                  isNextForToday ? "text-violet-300" :
-                                    "text-slate-500"
-                                }`}>
-                                {CHECK_IN_LABELS[type]}
-                              </span>
+                              <div>
+                                <span className={`text-sm font-medium ${ci ? "text-white" :
+                                    isNextForToday ? "text-violet-300" :
+                                      "text-slate-500"
+                                  }`}>
+                                  {CHECK_IN_LABELS[type]}
+                                </span>
+                                {depEstimate && (
+                                  <p className="text-xs text-amber-400 font-mono mt-0.5">
+                                    → {depEstimate} pour 7h
+                                  </p>
+                                )}
+                              </div>
                               {ci?.is_manual && (
                                 <Badge variant="outline" className="text-xs border-amber-700/50 text-amber-500 py-0">
                                   Manuel
