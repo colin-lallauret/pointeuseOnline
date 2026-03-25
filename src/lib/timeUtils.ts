@@ -1,4 +1,4 @@
-import { CheckIn, CheckInType, DayStats, WeekStats, DepartureEstimate } from "@/types";
+import { CheckIn, CheckInType, DayOff, DayStats, WeekStats, DepartureEstimate } from "@/types";
 import { format, parseISO, startOfWeek, addMinutes, setHours, setMinutes, isMonday, isTuesday, isWednesday, isThursday, isFriday } from "date-fns";
 import { toZonedTime, fromZonedTime } from "date-fns-tz";
 
@@ -108,6 +108,11 @@ export function computeDayStats(checkIns: CheckIn[]): Record<string, DayStats> {
             workedMinutes += (eveningOut - lunchIn) / 60000;
         }
 
+        const lunchBreakMinutes =
+            byType.lunch_out && byType.lunch_in
+                ? Math.round((parseISO(byType.lunch_in).getTime() - parseISO(byType.lunch_out).getTime()) / 60000)
+                : undefined;
+
         result[day] = {
             morning_in: byType.morning_in,
             lunch_out: byType.lunch_out,
@@ -115,6 +120,7 @@ export function computeDayStats(checkIns: CheckIn[]): Record<string, DayStats> {
             evening_out: byType.evening_out,
             workedMinutes: Math.max(0, workedMinutes),
             isComplete: !!(byType.morning_in && byType.lunch_out && byType.lunch_in && byType.evening_out),
+            lunchBreakMinutes,
         };
     }
 
@@ -123,20 +129,36 @@ export function computeDayStats(checkIns: CheckIn[]): Record<string, DayStats> {
 
 /**
  * Computes a week's worth of stats (Mon–Fri), credit/debit
+ * dayOffs : jours marqués comme non travaillés — exclus du crédit ET du total attendu
  */
-export function computeWeekStats(checkIns: CheckIn[], weekStart: Date): WeekStats {
+export function computeWeekStats(checkIns: CheckIn[], weekStart: Date, dayOffs: DayOff[] = []): WeekStats {
     const days = computeDayStats(checkIns);
-    const totalWorkedMinutes = Object.values(days).reduce((sum, d) => sum + d.workedMinutes, 0);
+    const dayOffDates = new Set(dayOffs.map((d) => d.date));
 
-    // Count only completed work days (not today if incomplete)
-    const completedDays = Object.values(days).filter((d) => d.isComplete);
-    const expectedMinutes = completedDays.length * DAILY_GOAL_MINUTES;
-    const creditMinutes = totalWorkedMinutes - expectedMinutes;
+    // Les jours off n'entrent ni dans le total travaillé ni dans le crédit
+    const totalWorkedMinutes = Object.entries(days)
+        .filter(([day]) => !dayOffDates.has(day))
+        .reduce((sum, [, d]) => sum + d.workedMinutes, 0);
+
+    // Le crédit ne se calcule que sur les jours terminés ET non-off
+    const completedDays = Object.entries(days)
+        .filter(([day, d]) => d.isComplete && !dayOffDates.has(day))
+        .map(([, d]) => d);
+    const creditMinutes = completedDays.reduce(
+        (sum, d) => sum + (d.workedMinutes - DAILY_GOAL_MINUTES),
+        0
+    );
+
+    // Semaine de 5 jours moins les jours off
+    const workingDaysCount = Math.max(0, 5 - dayOffDates.size);
+    const expectedMinutes = workingDaysCount * DAILY_GOAL_MINUTES;
 
     return {
         totalWorkedMinutes,
+        expectedMinutes,
         creditMinutes,
         days,
+        dayOffDates,
     };
 }
 
@@ -179,9 +201,13 @@ export function formatDuration(minutes: number): string {
     const abs = Math.abs(minutes);
     const h = Math.floor(abs / 60);
     const m = Math.round(abs % 60);
-    const sign = minutes < 0 ? "-" : "+";
-    if (h === 0) return `${sign === "-" ? "-" : ""}${m}min`;
-    return `${sign === "-" ? "-" : ""}${h}h${m > 0 ? String(m).padStart(2, "0") : ""}`;
+    
+    let signStr = "";
+    if (minutes < 0) signStr = "-";
+    else if (minutes > 0) signStr = "+";
+
+    if (h === 0) return `${signStr}${m}min`;
+    return `${signStr}${h}h${m > 0 ? String(m).padStart(2, "0") : ""}`;
 }
 
 /**
@@ -190,4 +216,54 @@ export function formatDuration(minutes: number): string {
 export function getCurrentWeekMonday(now: Date): Date {
     const paris = toZonedTime(now, TZ);
     return startOfWeek(paris, { weekStartsOn: 1 });
+}
+
+/**
+ * Computes lost hours for past weeks.
+ * A lost hour is when a week ends with positive credit.
+ */
+export function computeLostHours(
+    pastCheckIns: CheckIn[],
+    pastDayOffs: DayOff[],
+    currentWeekStart: Date
+): { lastWeekLost: number; totalLost: number } {
+    let totalLost = 0;
+    let lastWeekLost = 0;
+
+    // Group check-ins and dayOffs by week start
+    const checkInsByWeek: Record<string, CheckIn[]> = {};
+    const dayOffsByWeek: Record<string, DayOff[]> = {};
+
+    for (const c of pastCheckIns) {
+        const d = parseISO(c.timestamp);
+        const ws = startOfWeek(toZonedTime(d, TZ), { weekStartsOn: 1 }).toISOString();
+        if (!checkInsByWeek[ws]) checkInsByWeek[ws] = [];
+        checkInsByWeek[ws].push(c);
+    }
+
+    for (const d of pastDayOffs) {
+        const dt = parseISO(`${d.date}T12:00:00`);
+        const ws = startOfWeek(toZonedTime(dt, TZ), { weekStartsOn: 1 }).toISOString();
+        if (!dayOffsByWeek[ws]) dayOffsByWeek[ws] = [];
+        dayOffsByWeek[ws].push(d);
+    }
+
+    const currentWeekStartStr = startOfWeek(toZonedTime(currentWeekStart, TZ), { weekStartsOn: 1 }).toISOString();
+    const lastWeekStartStr = startOfWeek(toZonedTime(new Date(currentWeekStart.getTime() - 7 * 24 * 3600 * 1000), TZ), { weekStartsOn: 1 }).toISOString();
+    const allWeekKeys = new Set([...Object.keys(checkInsByWeek), ...Object.keys(dayOffsByWeek)]);
+
+    for (const wsStr of allWeekKeys) {
+        if (wsStr >= currentWeekStartStr) continue; // On ignore la semaine actuelle et futures
+        
+        const weekDate = parseISO(wsStr);
+        const stats = computeWeekStats(checkInsByWeek[wsStr] || [], weekDate, dayOffsByWeek[wsStr] || []);
+        if (stats.creditMinutes > 0) {
+            totalLost += stats.creditMinutes;
+            if (wsStr === lastWeekStartStr) {
+                lastWeekLost = stats.creditMinutes;
+            }
+        }
+    }
+
+    return { lastWeekLost, totalLost };
 }

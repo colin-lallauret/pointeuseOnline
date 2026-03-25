@@ -14,10 +14,10 @@ interface WeekBarProps {
 
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Jeu", "Ven"];
 const DAILY_GOAL = 7 * 60;
-const WEEKLY_GOAL = 35 * 60;
 
 export function WeekBar({ weekStats, weekRef, isCurrentWeek }: WeekBarProps) {
-    const progressPercent = Math.min(100, (weekStats.totalWorkedMinutes / WEEKLY_GOAL) * 100);
+    const expected = weekStats.expectedMinutes || (35 * 60);
+    const progressPercent = expected > 0 ? Math.min(100, (weekStats.totalWorkedMinutes / expected) * 100) : 100;
 
     // Indice du jour courant dans la semaine (0=Lun … 4=Ven), ou -1 si autre semaine
     const todayIndex = isCurrentWeek ? Math.min(4, Math.max(0, new Date().getDay() - 1)) : -1;
@@ -58,26 +58,34 @@ export function WeekBar({ weekStats, weekRef, isCurrentWeek }: WeekBarProps) {
                     const isToday = i === todayIndex;
                     const isPast = isCurrentWeek ? i < todayIndex : true;
                     const isFuture = isCurrentWeek ? i > todayIndex : false;
+                    const isOff = weekStats.dayOffDates?.has(dayKey);
 
                     return (
-                        <div key={day} className="flex-1 flex flex-col items-center gap-1.5">
+                        <div key={day} className={`flex-1 flex flex-col items-center gap-1.5 ${isOff ? "opacity-50 grayscale" : ""}`}>
                             {/* Mini barre verticale */}
-                            <div className="w-full h-8 bg-slate-800 rounded-xl overflow-hidden flex items-end">
+                            <div className="w-full h-8 bg-slate-800 rounded-xl overflow-hidden flex items-end relative">
+                                {isOff && (
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                       <span className="text-[10px] font-bold text-slate-700/80 transform rotate-[-90deg]">OFF</span>
+                                    </div>
+                                )}
                                 <div
-                                    className={`w-full rounded-xl transition-all duration-500 ${dayData?.isComplete
-                                            ? "bg-emerald-500"
-                                            : isToday && workedMin > 0
-                                                ? "bg-violet-500"
-                                                : isPast && workedMin > 0
-                                                    ? "bg-slate-500"
-                                                    : isPast && !workedMin
-                                                        ? "bg-red-900/50"
-                                                        : "bg-slate-700"
+                                    className={`w-full rounded-xl transition-all duration-500 ${isOff
+                                            ? "bg-slate-800"
+                                            : dayData?.isComplete
+                                                ? "bg-emerald-500"
+                                                : isToday && workedMin > 0
+                                                    ? "bg-violet-500"
+                                                    : isPast && workedMin > 0
+                                                        ? "bg-slate-500"
+                                                        : isPast && !workedMin
+                                                            ? "bg-red-900/50"
+                                                            : "bg-slate-700"
                                         }`}
-                                    style={{ height: `${Math.max(percent > 0 ? 8 : 0, percent)}%` }}
+                                    style={{ height: isOff ? '100%' : `${Math.max(percent > 0 ? 8 : 0, percent)}%` }}
                                 />
                             </div>
-                            <span className={`text-xs font-medium ${isToday
+                            <span className={`text-xs font-medium ${isOff ? "line-through text-slate-600" : isToday
                                     ? "text-violet-400"
                                     : isFuture
                                         ? "text-slate-600"
@@ -94,7 +102,7 @@ export function WeekBar({ weekStats, weekRef, isCurrentWeek }: WeekBarProps) {
                 <span className="text-xs text-slate-500">
                     {formatDuration(weekStats.totalWorkedMinutes).replace("+", "")} travaillées
                 </span>
-                <span className="text-xs text-slate-500">objectif 35h</span>
+                <span className="text-xs text-slate-500">objectif {formatDuration(expected).replace("+", "")}</span>
             </div>
         </Card>
     );

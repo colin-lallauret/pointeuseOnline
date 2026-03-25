@@ -2,13 +2,14 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { CheckIn, CheckInType } from "@/types";
+import { CheckIn, CheckInType, DayOff } from "@/types";
 import {
   getNextCheckIn,
   isWithinTimeRange,
   computeDayStats,
   computeWeekStats,
   computeDepartureEstimate,
+  computeLostHours,
   formatDuration,
   CHECK_IN_LABELS,
   CHECK_IN_ICONS,
@@ -47,6 +48,8 @@ export default function DashboardPage() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [todayCheckIns, setTodayCheckIns] = useState<CheckIn[]>([]);
   const [weekCheckIns, setWeekCheckIns] = useState<CheckIn[]>([]);
+  const [weekDayOffs, setWeekDayOffs] = useState<DayOff[]>([]);
+  const [lostStats, setLostStats] = useState<{lastWeekLost: number, totalLost: number} | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [now, setNow] = useState<Date | null>(null);
   const [weekOffset, setWeekOffset] = useState(0);
@@ -91,7 +94,9 @@ export default function DashboardPage() {
     const weekStart = startOfWeek(weekRefDate, { weekStartsOn: 1 }).toISOString();
     const weekEnd = endOfWeek(weekRefDate, { weekStartsOn: 1 }).toISOString();
 
-    const [{ data: todayData }, { data: weekData }] = await Promise.all([
+    const actualCurrentWeekStart = startOfWeek(parisToday, { weekStartsOn: 1 }).toISOString();
+
+    const [{ data: todayData }, { data: weekData }, { data: dayOffData }, { data: pastCheckInsData }, { data: pastDayOffsData }] = await Promise.all([
       supabase
         .from("check_ins")
         .select("*")
@@ -106,10 +111,36 @@ export default function DashboardPage() {
         .gte("timestamp", weekStart)
         .lte("timestamp", weekEnd)
         .order("timestamp", { ascending: true }),
+      supabase
+        .from("day_offs")
+        .select("*")
+        .eq("user_id", user.id)
+        .gte("date", format(startOfWeek(weekRefDate, { weekStartsOn: 1 }), "yyyy-MM-dd"))
+        .lte("date", format(endOfWeek(weekRefDate, { weekStartsOn: 1 }), "yyyy-MM-dd")),
+      supabase
+        .from("check_ins")
+        .select("*")
+        .eq("user_id", user.id)
+        .lt("timestamp", actualCurrentWeekStart),
+      supabase
+        .from("day_offs")
+        .select("*")
+        .eq("user_id", user.id)
+        .lt("date", format(startOfWeek(parisToday, { weekStartsOn: 1 }), "yyyy-MM-dd")),
     ]);
 
     setTodayCheckIns((todayData as CheckIn[]) || []);
     setWeekCheckIns((weekData as CheckIn[]) || []);
+    setWeekDayOffs((dayOffData as DayOff[]) || []);
+
+    // Calcul des heures perdues des semaines passées
+    const lost = computeLostHours(
+      (pastCheckInsData as CheckIn[]) || [],
+      (pastDayOffsData as DayOff[]) || [],
+      currentTime
+    );
+    setLostStats(lost);
+
     setIsLoading(false);
   }, [user, supabase, weekOffset, now]);
 
@@ -121,7 +152,7 @@ export default function DashboardPage() {
   const nextCheckIn = getNextCheckIn(todayCheckIns);
   const isOutOfRange = nextCheckIn ? !isWithinTimeRange(nextCheckIn, resolved) : false;
   const todayStats = computeDayStats(todayCheckIns)[todayKey] || { workedMinutes: 0, isComplete: false };
-  const weekStats = computeWeekStats(weekCheckIns, weekRef);
+  const weekStats = computeWeekStats(weekCheckIns, weekRef, weekDayOffs);
   const departure = computeDepartureEstimate(todayStats, weekStats.creditMinutes, resolved);
 
   async function handleCheckIn() {
@@ -153,6 +184,23 @@ export default function DashboardPage() {
 
   function openEdit(type: CheckInType, existingCheckIn: CheckIn | null, dayKey: string) {
     setEditTarget({ type, existingCheckIn, defaultDate: dayKey });
+  }
+
+  async function toggleDayOff(day: string) {
+    if (!user) return;
+    const existing = weekDayOffs.find((d) => d.date === day);
+    if (existing) {
+      // Retirer le jour off
+      const { error } = await supabase.from("day_offs").delete().eq("id", existing.id);
+      if (error) { toast.error("Erreur lors de la suppression"); return; }
+      toast.success("Jour remis en travaillé ✅");
+    } else {
+      // Ajouter le jour off
+      const { error } = await supabase.from("day_offs").insert({ user_id: user.id, date: day });
+      if (error) { toast.error("Erreur lors de l'ajout"); return; }
+      toast.success("Jour marqué comme non travaillé 🌴");
+    }
+    await fetchCheckIns();
   }
 
   /**
@@ -275,6 +323,24 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Bulles heures perdues (affichées uniquement sur les semaines passées) */}
+        {!isCurrentWeek && (weekStats.creditMinutes > 0 || (lostStats && lostStats.totalLost > 0)) && (
+          <div className="grid grid-cols-2 gap-3 mt-1">
+            {weekStats.creditMinutes > 0 ? (
+              <Card className="rounded-2xl p-3 border border-orange-900/40 bg-orange-950/20">
+                <p className="text-[10px] text-orange-500/80 uppercase tracking-wider font-semibold">Perdu sur cette semaine</p>
+                <p className="text-lg font-bold text-orange-400 mt-0.5">{formatDuration(weekStats.creditMinutes).replace("+", "")}</p>
+              </Card>
+            ) : <div />}
+            {lostStats && lostStats.totalLost > 0 ? (
+              <Card className="rounded-2xl p-3 border border-red-900/40 bg-red-950/20">
+                <p className="text-[10px] text-red-500/80 uppercase tracking-wider font-semibold">Total récurrent perdu</p>
+                <p className="text-lg font-bold text-red-400 mt-0.5">{formatDuration(lostStats.totalLost).replace("+", "")}</p>
+              </Card>
+            ) : <div />}
+          </div>
+        )}
+
         {/* ===  5 jours de la semaine — vue unifiée === */}
         <Card className="bg-slate-900 border-slate-800 rounded-3xl p-4">
           <div className="flex items-center justify-between mb-3">
@@ -294,6 +360,7 @@ export default function DashboardPage() {
               const isToday = day === todayKey;
               const isFuture = day > todayKey;
               const isOpen = openDay === day;
+              const isOff = weekStats.dayOffDates.has(day);
 
               return (
                 <div key={day} className="rounded-2xl overflow-hidden">
@@ -302,43 +369,54 @@ export default function DashboardPage() {
                     onClick={() => setOpenDay(isOpen ? null : day)}
                     className={`w-full flex items-center justify-between px-4 py-3 transition-all text-left ${isToday
                       ? "bg-violet-950/50 border border-violet-700/40"
-                      : isComplete
-                        ? "bg-slate-800/60"
-                        : isFuture
-                          ? "bg-slate-900/40 opacity-60"
-                          : "bg-slate-800/30"
+                      : isOff
+                        ? "bg-slate-900/40 opacity-70"
+                        : isComplete
+                          ? "bg-slate-800/60"
+                          : isFuture
+                            ? "bg-slate-900/40 opacity-60"
+                            : "bg-slate-800/30"
                       } ${isOpen ? "rounded-t-2xl" : "rounded-2xl"} hover:brightness-110 active:scale-98`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${isComplete ? "bg-emerald-500" :
+                      <div className={`w-2 h-2 rounded-full ${isOff ? "bg-slate-700" :
+                        isComplete ? "bg-emerald-500" :
                         isToday ? "bg-violet-500 animate-pulse" :
                           isFuture ? "bg-slate-700" :
                             workedMin > 0 ? "bg-amber-500" : "bg-red-900"
                         }`} />
                       <div>
-                        <p className={`text-sm font-semibold capitalize ${isToday ? "text-violet-300" : isFuture ? "text-slate-500" : "text-white"}`}>
+                        <p className={`text-sm font-semibold capitalize ${isOff ? "text-slate-500 line-through decoration-slate-600/50" : isToday ? "text-violet-300" : isFuture ? "text-slate-500" : "text-white"}`}>
                           {dayName}
-                          {isToday && <span className="ml-2 text-xs font-normal text-violet-400">Aujourd'hui</span>}
+                          {isToday && !isOff && <span className="ml-2 text-xs font-normal text-violet-400">Aujourd'hui</span>}
                         </p>
                         <p className="text-xs text-slate-500 mt-0.5">
-                          {stats?.morning_in
-                            ? `${format(toZonedTime(parseISO(stats.morning_in), TZ), "HH:mm")} → ${stats.evening_out
-                              ? format(toZonedTime(parseISO(stats.evening_out), TZ), "HH:mm")
-                              : "?"
-                            }`
-                            : isFuture ? "Jour à venir" : "Aucun pointage · Appuyez"}
+                          {isOff 
+                            ? "Jour non travaillé" 
+                            : stats?.morning_in
+                              ? `${format(toZonedTime(parseISO(stats.morning_in), TZ), "HH:mm")} → ${stats.evening_out
+                                ? format(toZonedTime(parseISO(stats.evening_out), TZ), "HH:mm")
+                                : "?"
+                              }`
+                              : isFuture ? "Jour à venir" : "Aucun pointage · Appuyez"}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="text-right">
-                        <p className={`text-sm font-bold tabular-nums ${isComplete ? "text-white" : "text-slate-500"}`}>
-                          {workedMin > 0 ? formatDuration(workedMin).replace("+", "") : "—"}
-                        </p>
-                        {isComplete && (
-                          <p className={`text-xs ${workedMin >= 420 ? "text-emerald-400" : "text-red-400"}`}>
-                            {formatDuration(workedMin - 420)}
-                          </p>
+                        {isOff ? (
+                          <p className="text-sm font-bold text-slate-500 uppercase">OFF</p>
+                        ) : (
+                          <>
+                            <p className={`text-sm font-bold tabular-nums ${isComplete ? "text-white" : "text-slate-500"}`}>
+                              {workedMin > 0 ? formatDuration(workedMin).replace("+", "") : "—"}
+                            </p>
+                            {isComplete && (
+                              <p className={`text-xs ${workedMin >= 420 ? "text-emerald-400" : "text-red-400"}`}>
+                                {formatDuration(workedMin - 420)}
+                              </p>
+                            )}
+                          </>
                         )}
                       </div>
                       <span className={`text-slate-600 text-xs transition-transform duration-200 ${isOpen ? "rotate-90" : ""}`}>▶</span>
@@ -403,6 +481,45 @@ export default function DashboardPage() {
                           </button>
                         );
                       })}
+
+                      {/* Durée de pause méridienne */}
+                      {(() => {
+                        const dayStats = weekStats.days[day];
+                        if (dayStats?.lunchBreakMinutes == null) return null;
+                        const mins = dayStats.lunchBreakMinutes;
+                        const h = Math.floor(mins / 60);
+                        const m = mins % 60;
+                        const label = h > 0 ? `${h}h${String(m).padStart(2, "0")}` : `${m} min`;
+                        const isShort = mins < 45;
+                        return (
+                          <div className={`mx-1 mt-1 flex items-center justify-between rounded-xl px-4 py-2 ${isShort ? "bg-orange-950/40 border border-orange-800/30" : "bg-emerald-950/30 border border-emerald-800/20"}`}>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base">☕</span>
+                              <span className="text-sm text-slate-400">Temps de pause à midi</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-sm font-mono font-semibold tabular-nums ${isShort ? "text-orange-400" : "text-emerald-400"}`}>
+                                {label}
+                              </span>
+                              {isShort && <span className="text-xs text-orange-500">⚠️</span>}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Bouton Toggle OFF */}
+                      <div className="pt-2 px-1 pb-1">
+                        <button
+                          onClick={() => toggleDayOff(day)}
+                          className={`w-full flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-medium transition-all active:scale-95 ${
+                            isOff
+                              ? "border-slate-700 bg-slate-800/60 text-white hover:bg-slate-700"
+                              : "border-slate-800/60 bg-slate-900/30 text-slate-400 hover:bg-slate-800 hover:text-white"
+                          }`}
+                        >
+                          {isOff ? "🔄 Remettre en travaillé" : "🌴 Marquer comme jour non travaillé"}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -411,11 +528,15 @@ export default function DashboardPage() {
           </div>
 
           {/* Total de la semaine */}
-          <div className="mt-3 pt-3 border-t border-slate-800 flex justify-between">
+          <div className="mt-3 pt-3 border-t border-slate-800 flex justify-between items-center">
             <span className="text-sm text-slate-400">Total semaine</span>
             <div className="text-right">
               <span className="text-sm font-bold text-white tabular-nums">
                 {formatDuration(weekStats.totalWorkedMinutes).replace("+", "")}
+              </span>
+              <span className="text-xs text-slate-500 mx-1">/</span>
+              <span className="text-xs font-medium text-slate-400">
+                {formatDuration(weekStats.expectedMinutes).replace("+", "")}
               </span>
               <span className={`text-xs ml-2 font-semibold ${weekStats.creditMinutes >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 ({formatDuration(weekStats.creditMinutes)})
