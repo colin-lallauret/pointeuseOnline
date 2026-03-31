@@ -12,6 +12,15 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Pointeuse — Mon Suivi de Temps",
   description: "Application de pointage mobile-first pour suivre vos heures de stage",
+  applicationName: "Pointeuse",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Pointeuse"
+  },
+  formatDetection: {
+    telephone: false
+  }
 };
 
 export const viewport: Viewport = {
@@ -22,6 +31,9 @@ export const viewport: Viewport = {
   themeColor: "#030712",
 };
 
+import { ServiceWorkerRegister } from "@/components/service-worker-register";
+import { InstallPrompt } from "@/components/install-prompt";
+
 export default function RootLayout({
   children,
 }: {
@@ -30,6 +42,8 @@ export default function RootLayout({
   return (
     <html lang="fr" className={inter.variable} suppressHydrationWarning>
       <body className="font-sans antialiased bg-slate-950 text-white min-h-screen" suppressHydrationWarning>
+        <ServiceWorkerRegister />
+        <InstallPrompt />
         {children}
         <Toaster richColors position="top-center" />
       </body>
