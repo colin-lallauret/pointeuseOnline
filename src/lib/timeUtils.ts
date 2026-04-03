@@ -185,12 +185,25 @@ export function computeDepartureEstimate(
 
     // If there's a credit from previous days, subtract it from today's required time
     // But credit resets weekly - only use current week's credit
-    const remainingWithCredit = Math.max(0, remainingForGoal - weekCreditMinutes);
-    const withWeekCredit = new Date(lunchIn + remainingWithCredit * 60000);
+    const remainingWithCredit = remainingForGoal - weekCreditMinutes;
+    let withWeekCreditTime = new Date(lunchIn + remainingWithCredit * 60000);
+
+    const parisNow = toZonedTime(now, TZ);
+    const isFridayToday = isFriday(parisNow);
+    const minH = isFridayToday ? 16 : 16;
+    const minM = isFridayToday ? 0 : 30;
+    const minDepartureTime = setMinutes(setHours(parisNow, minH), minM);
+
+    let isCapped = false;
+    if (withWeekCreditTime < minDepartureTime) {
+        withWeekCreditTime = minDepartureTime;
+        isCapped = true;
+    }
 
     return {
         forDailyGoal: format(toZonedTime(forDailyGoal, TZ), "HH:mm"),
-        withWeekCredit: format(toZonedTime(withWeekCredit, TZ), "HH:mm"),
+        withWeekCredit: format(toZonedTime(withWeekCreditTime, TZ), "HH:mm"),
+        isCapped,
     };
 }
 

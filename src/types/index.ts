@@ -39,5 +39,6 @@ export interface WeekStats {
 export interface DepartureEstimate {
     forDailyGoal: string | null;    // To reach 7h today
     withWeekCredit: string | null;  // To use weekly credit
+    isCapped?: boolean;             // True if withWeekCredit was limited by minimum departure time (16:30 or 16:00)
 }
 

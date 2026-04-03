@@ -34,7 +34,22 @@ export function DepartureWidget({ departure, creditMinutes }: DepartureWidgetPro
                     </p>
                 </div>
 
-
+                {/* Option 2 : utiliser son crédit */}
+                {creditMinutes > 0 && departure.withWeekCredit && (
+                    <div className="flex items-center justify-between bg-violet-900/40 border border-violet-800/50 rounded-2xl px-4 py-3">
+                        <div>
+                            <p className="text-sm font-medium text-violet-200">En utilisant votre crédit</p>
+                            <p className="text-xs text-violet-400 mt-0.5">
+                                {departure.isCapped 
+                                    ? "Limité par l'heure de départ minimum" 
+                                    : "Équilibre la semaine exacte à 35h"}
+                            </p>
+                        </div>
+                        <p className="text-2xl font-bold text-violet-300 tabular-nums">
+                            {departure.withWeekCredit}
+                        </p>
+                    </div>
+                )}
 
                 {/* Pas de crédit / en retard */}
                 {creditMinutes <= 0 && (
