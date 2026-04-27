@@ -34,6 +34,7 @@ import { CheckInButton } from "@/components/CheckInButton";
 import { DepartureWidget } from "@/components/DepartureWidget";
 import { WeekBar } from "@/components/WeekBar";
 import { ManualEntryModal } from "@/components/ManualEntryModal";
+import { SettingsModal } from "@/components/SettingsModal";
 
 const TZ = "Europe/Paris";
 
@@ -54,6 +55,7 @@ export default function DashboardPage() {
   const [now, setNow] = useState<Date | null>(null);
   const [weekOffset, setWeekOffset] = useState(0);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   // Quel jour est déployé dans l'accordéon (clé yyyy-MM-dd)
   const [openDay, setOpenDay] = useState<string | null>(null);
 
@@ -259,11 +261,11 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleSignOut}
+            onClick={() => setIsSettingsOpen(true)}
             className="w-10 h-10 rounded-2xl bg-slate-800 flex items-center justify-center text-slate-300 hover:bg-slate-700 active:scale-95 transition-all"
-            title="Déconnexion"
+            title="Paramètres"
           >
-            👋
+            ⚙️
           </button>
         </div>
       </header>
@@ -569,6 +571,15 @@ export default function DashboardPage() {
           userId={user.id}
           onClose={() => setEditTarget(null)}
           onSave={fetchCheckIns}
+        />
+      )}
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <SettingsModal
+          user={user}
+          onClose={() => setIsSettingsOpen(false)}
+          onSignOut={handleSignOut}
         />
       )}
     </div>
